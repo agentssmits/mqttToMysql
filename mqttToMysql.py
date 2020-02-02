@@ -2,12 +2,20 @@
 import paho.mqtt.client as mqtt #import the client
 import time
 import argparse
+import signal
 
 from mysql import AtemMySQL
+from mqttBroker import Broker
 from credentials import *
 
+global run
+global flag_connected
 
-flag_connected = 0
+
+def signal_handler(sig, frame):
+	global run
+	print('You pressed Ctrl+C, wait till script terminates')
+	run = False
 
 def on_connect(client, userdata, flags, rc):
    global flag_connected
@@ -49,26 +57,38 @@ if __name__ == "__main__":
 						help="provide your node name")
 	args = parser.parse_args()
 	
-	TOPICS = [("/atem/%s/sensors" % (args.nodeName), 0), ("/atem/%s/sts" % (args.nodeName), 1)]
+	TOPICS = [("/atem/%s/%s" % (args.nodeName, TABLE1), 0), ("/atem/%s/%s" % (args.nodeName, TABLE2), 1)]
 	mysql = AtemMySQL(args.nodeName)
 	
+	#launch brokers
+	dataBroker = Broker(args.nodeName, TABLE1)
+	statusBroker = Broker(args.nodeName, TABLE2)
+	
 	global flag_connected
-	while 1:
+	global run
+	flag_connected = 0
+	run = True
+	
+	signal.signal(signal.SIGINT, signal_handler)
+
+	while run:
 		print("creating new instance")
-		client = mqtt.Client("P1") #create new instance
+		client = mqtt.Client("Cl-%s" % (args.nodeName)) #create new instance
 		client.	username_pw_set(MQTT_USER, password=MQTT_PASS)
 		client.on_message=on_message #attach function to callback
 		client.on_connect = on_connect
 		client.on_disconnect = on_disconnect
 		print("connecting to broker")
-		client.connect(MQTT_HOST) #connect to broker
+		client.connect(MQTT_LOCAL_HOST) #connect to broker
 		client.loop_start() #start the loop
 		print("Subscribing to topic", TOPICS)
 		client.subscribe(TOPICS)
 			
-		while 1:
+		while run:
 			try:
 				client.loop()
+				dataBroker.relaunch()
+				statusBroker.relaunch()
 			except Exception as e:
 				print "Exception occured: %s" % (e)
 				break
@@ -76,3 +96,7 @@ if __name__ == "__main__":
 				break
 		print "MQTT stop"
 		client.loop_stop() #stop the loop
+		
+	client.loop_stop()
+	dataBroker.stop()
+	statusBroker.stop()
